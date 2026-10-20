@@ -19,6 +19,7 @@ async function postToFacebook(
   title: string,
   summary: string,
   url: string,
+  imageUrl: string | null,
 ): Promise<string> {
   if (!ZERNIO_API_KEY || !ZERNIO_FB_ACCOUNT_ID) return "FB skipped (no keys)";
   try {
@@ -31,6 +32,8 @@ async function postToFacebook(
       body: JSON.stringify({
         content: `${title}\n\n${summary}\n\n${url}`,
         platforms: [{ platform: "facebook", accountId: ZERNIO_FB_ACCOUNT_ID }],
+        // Photo post: image is attached natively. Omitted if no image uploaded.
+        ...(imageUrl ? { mediaItems: [{ type: "image", url: imageUrl }] } : {}),
         publishNow: true, // verify field name in Zernio docs
       }),
     });
@@ -107,6 +110,7 @@ const handler = createMcpHandler((server) => {
         "base64",
       );
       let featured_media_id: number | null = null;
+      let featured_image_public_url: string | null = null;
       let imageBuffer: Buffer | null = null;
       let mimeType = "image/jpeg";
       let ext = "jpg";
@@ -238,6 +242,7 @@ const handler = createMcpHandler((server) => {
           if (mediaUploadRes.ok) {
             const mediaData = await mediaUploadRes.json();
             featured_media_id = mediaData.id;
+            featured_image_public_url = mediaData.source_url ?? null;
             console.log(
               `Successfully uploaded image to WP! Media ID: ${featured_media_id}`,
             );
@@ -343,7 +348,12 @@ const handler = createMcpHandler((server) => {
         // ==========================================
         let fbNote = "FB skipped";
         if (status === "publish" && !skip_social) {
-          fbNote = await postToFacebook(title, excerpt, data.link);
+          fbNote = await postToFacebook(
+            title,
+            excerpt,
+            data.link,
+            featured_image_public_url,
+          );
         }
 
         return {
