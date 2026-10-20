@@ -6,9 +6,41 @@ const WP_USERNAME = process.env.WP_USERNAME;
 const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const POLLINATIONS_API_KEY = process.env.POLLINATIONS_API_KEY;
+const ZERNIO_API_KEY = process.env.ZERNIO_API_KEY;
+const ZERNIO_FB_ACCOUNT_ID = process.env.ZERNIO_FB_ACCOUNT_ID;
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+// Posts title + short summary + link to the connected Facebook page via Zernio.
+// Never throws: a Facebook failure must not fail the WordPress publish.
+async function postToFacebook(
+  title: string,
+  summary: string,
+  url: string,
+): Promise<string> {
+  if (!ZERNIO_API_KEY || !ZERNIO_FB_ACCOUNT_ID) return "FB skipped (no keys)";
+  try {
+    const res = await fetch("https://zernio.com/api/v1/posts", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ZERNIO_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        content: `${title}\n\n${summary}\n\n${url}`,
+        platforms: [{ platform: "facebook", accountId: ZERNIO_FB_ACCOUNT_ID }],
+        publishNow: true, // verify field name in Zernio docs
+      }),
+    });
+    if (!res.ok) {
+      return `FB FAILED (${res.status}): ${(await res.text()).slice(0, 200)}`;
+    }
+    return "FB posted";
+  } catch (e: unknown) {
+    return `FB FAILED: ${errMsg(e)}`;
+  }
 }
 
 const handler = createMcpHandler((server) => {
@@ -48,6 +80,10 @@ const handler = createMcpHandler((server) => {
             "TIER 2 & 3: ONLY USE IF NO URL IS FOUND. Provide a highly detailed visual description for AI generation.",
           ),
         status: z.enum(["publish", "draft"]).default("publish"),
+        skip_social: z
+          .boolean()
+          .default(false)
+          .describe("Set true for updates to existing posts (no Facebook post)."),
       }),
     },
     async ({
@@ -58,6 +94,7 @@ const handler = createMcpHandler((server) => {
       featured_image_url,
       image_prompt,
       status,
+      skip_social,
     }) => {
       if (!WP_SITE_URL || !WP_USERNAME || !WP_APP_PASSWORD) {
         return {
@@ -301,11 +338,19 @@ const handler = createMcpHandler((server) => {
           };
         }
 
+        // ==========================================
+        // POST SUMMARY TO FACEBOOK VIA ZERNIO
+        // ==========================================
+        let fbNote = "FB skipped";
+        if (status === "publish" && !skip_social) {
+          fbNote = await postToFacebook(title, excerpt, data.link);
+        }
+
         return {
           content: [
             {
               type: "text",
-              text: `Successfully published! Live URL: ${data.link}`,
+              text: `Successfully published! Live URL: ${data.link}\n${fbNote}`,
             },
           ],
         };
